@@ -687,9 +687,13 @@ from scipy.interpolate import UnivariateSpline
 
 
 def points_kde(
-    points: np.ndarray, mesh_size_scale=1, bandwidth=0.025, 
+    all_points: np.ndarray, 
+    selected_index: np.ndarray,
+    mesh_size_scale=1, bandwidth=0.025, 
     zz_factor=lambda x: x, atol=0.5
 ):
+    points = all_points[selected_index]
+
     min_xy = points.min(axis=0)
     max_xy = points.max(axis=0)
     ps = (points - min_xy) / (max_xy - min_xy)
@@ -703,12 +707,19 @@ def points_kde(
     except ValueError:
         kde = KernelDensity(kernel='gaussian', bandwidth=bandwidth, atol=atol)
         zz = np.zeros((mesh_h, mesh_w))
+    
+    ps = (all_points - min_xy) / (max_xy - min_xy)
+    scores = np.exp(kde.score_samples(ps))
     zz = zz_factor(zz)
-    return kde, zz, min_xy, max_xy
+    return scores, kde, zz, min_xy, max_xy
 
 @memory.cache
-def cached_points_kde(points: np.ndarray, mesh_size_scale=1, bandwidth=0.025):
-    return points_kde(points, mesh_size_scale, bandwidth)
+def cached_points_kde(    
+    all_points: np.ndarray, 
+    selected_index: np.ndarray,
+    mesh_size_scale=1, bandwidth=0.025
+):
+    return points_kde(all_points, selected_index, mesh_size_scale, bandwidth)
 
 # %%
 @cache
@@ -763,6 +774,7 @@ def calc_all_mean_dists(cluster_df: pl.DataFrame):
 # %%
 @dataclass
 class KDEResultItem:
+    scores: np.ndarray
     kde: KernelDensity
     zz: np.ndarray
     min_xy: np.ndarray
@@ -772,6 +784,7 @@ class KDEResultItem:
 
 @dataclass
 class KDEResults:
+    scores: list[np.ndarray]
     kde: list[KernelDensity]
     zzs: list[np.ndarray]
     min_xys: list[np.ndarray]
@@ -783,14 +796,16 @@ class KDEResults:
 
     @staticmethod
     def new() -> 'KDEResults':
-        return KDEResults([], [], [], [], [], [], [])
+        return KDEResults([], [], [], [], [], [], [], [])
 
     def append(
         self, 
+        scores: np.ndarray,
         kde: KernelDensity,
         zz: np.ndarray, min_xy: np.ndarray, max_xy: np.ndarray, 
         fix_slice_id: str, cell_count: int, selected_cells: np.ndarray
     ):
+        self.scores.append(scores)
         self.kde.append(kde)
         self.zzs.append(zz)
         self.min_xys.append(min_xy)
@@ -813,6 +828,8 @@ class KDEResults:
         self.fix_slice_ids = [self.fix_slice_ids[i] for i in idxs]
         self.cell_counts = [self.cell_counts[i] for i in idxs]
         self.selected_cells = [self.selected_cells[i] for i in idxs]
+        self.scores = [self.scores[i] for i in idxs]
+        self.kde = [self.kde[i] for i in idxs]
         return self
 
     def __len__(self):
@@ -820,6 +837,7 @@ class KDEResults:
 
     def __getitem__(self, idx):
         return KDEResultItem(
+            self.scores[idx],
             self.kde[idx],
             self.zzs[idx], self.min_xys[idx], self.max_xys[idx], 
             self.fix_slice_ids[idx], self.cell_counts[idx]
@@ -856,10 +874,10 @@ def calc_cell_kde_by_slice(
         target_cell_index = slice_g['index'].to_numpy()[less_p_idx]
         if len(less_p_cell_points) < 3: return
         # print(less_p_cell_points.shape, fix_slice_id)
-        kde, zz, min_xy, max_xy = points_kde(
-            less_p_cell_points, bandwidth=bandwidth,
+        scores, kde, zz, min_xy, max_xy = points_kde(
+            cell_points, less_p_idx, bandwidth=bandwidth,
         )
-        return kde, zz, min_xy, max_xy, fix_slice_id, less_p_cell_points.shape[0], target_cell_index
+        return scores, kde, zz, min_xy, max_xy, fix_slice_id, less_p_cell_points.shape[0], target_cell_index
 
     tasks = [
         delayed(f)(mean_dists, k[1], slice_g)
@@ -943,7 +961,7 @@ class DrawKDEArgs:
     '''按照pv选出来的细胞数量'''
 
     titles: list[str] = field(default_factory=list)
-
+    cell_alphas: list[float] = field(default_factory=list)
 
 def xy_to_index_wrapper(rcm: RangeCompressedMask, binary_search=False):
     def f(xy):
@@ -1020,7 +1038,7 @@ def draw_cells_with_kde(
     fix_cnts: list[np.ndarray],
     zz_cnt_res: dict[float, DrawKDEArgs],
     cell_df: pl.DataFrame,
-    alpha: float|None = None,
+    cell_r = 1,
 ):
     max_xy = np.max([i.max(axis=0) for i in fix_cnts], axis=0)
     min_xy = np.min([i.min(axis=0) for i in fix_cnts], axis=0)
@@ -1036,40 +1054,43 @@ def draw_cells_with_kde(
         ctx = cairo.Context(surface)
         ctx.set_source_rgb(0, 0, 0)
         ctx.set_line_width(5)
-        cell_points = cell_df.sample(n=10000)[['x', 'y']].to_numpy()
+        cell_points = cell_df[['x', 'y']].to_numpy()
 
         for i, (thr, draw_ked_args) in enumerate(zz_cnt_res.items()):
             base_x = 0
             base_y = i * single_h + i * margin_h
             d = np.array([base_x, base_y])
-            if alpha is None:
-                alphas = np.ones(len(cell_points))
-            else:
-                alphas = np.ones(len(cell_points)) / len(cell_points)
-                print(alphas)
+
 
 
             ctx.set_source_rgba(0, 1, 0, 0.9)            
             ctx.set_font_size(12)
 
-            for i, (cnt, title) in enumerate(zip(draw_ked_args.zz_cnt_res, draw_ked_args.titles)):
+            for j, (cnt, title) in enumerate(zip(draw_ked_args.zz_cnt_res, draw_ked_args.titles)):
                 draw_cnt(ctx, cnt + d - min_xy)
             
                 title_xy = cnt[0] + d - min_xy
                 ctx.move_to(*title_xy)
                 ctx.show_text(title)
 
-            ctx.set_source_rgba(0, 1, 0, 0.9)
-            for cnt in draw_ked_args.zz_cnt_res:
-                draw_cnt(ctx, cnt + d - min_xy, fill=True)
+            # ctx.set_source_rgba(0, 1, 0, 0.9)
+            # for cnt in draw_ked_args.zz_cnt_res:
+            #     draw_cnt(ctx, cnt + d - min_xy, fill=True)
 
             ctx.set_source_rgba(0, 0, 0, 0.5)
             for cnt in fix_cnts:
                 draw_cnt(ctx, cnt + d - min_xy)
 
-            for x, y in cell_points:
-                ctx.set_source_rgba(0, 0, 0, alphas[i])
-                ctx.arc(x + d[0] - min_xy[0], y + d[1] - min_xy[1], 3, 0, 2 * np.pi)
+            slice_kde = np.concatenate(draw_ked_args.cell_alphas)
+            print(slice_kde.shape, slice_kde.shape)
+            print(slice_kde, '\n', draw_ked_args.cell_alphas)
+            for s, (x, y) in zip(slice_kde, cell_points):
+                ctx.set_source_rgba(1, 0, 0, s)
+                ctx.arc(
+                    x + d[0] - min_xy[0], y + d[1] - min_xy[1], 
+                    cell_r, 
+                    0, 2 * np.pi
+                )
                 ctx.fill()
 
 pv = 99
@@ -1097,6 +1118,7 @@ for (k, ), g in cluster_df.group_by(['big-cluster'], maintain_order=True):
         (pc('y') // 2 * 2).cast(pl.Int64).alias('y_trunc'),
     ).unique(['x_trunc', 'y_trunc'])
 
+    target_cells_df = get_cluster_cells(k)
     fix_to_mov_slice_id_dict = dict(zip(*target_cells_df[['fix_slice_id', 'mov_slice_id']].unique(['mov_slice_id', 'fix_slice_id']).to_numpy().T))
 
     # thr = {
@@ -1110,6 +1132,10 @@ for (k, ), g in cluster_df.group_by(['big-cluster'], maintain_order=True):
 
     print(k, g.shape)
     zzs_data = calc_cell_kde_by_slice(k, pv=pv, bandwidth=bandwidth).sort()
+    all_score_max = np.max([np.max(i.scores) for i in zzs_data])
+    all_score_min = np.min([np.min(i.scores) for i in zzs_data])
+
+    zzs_data.scores = [(i.scores - all_score_min) / (all_score_max - all_score_min) for i in zzs_data]
 
     selected_cell_ids = np.concatenate(zzs_data.selected_cells)
     zz_cell_count_mov_mean = np.convolve(zzs_data.cell_counts, np.ones(3) / 3, mode='valid')
@@ -1127,13 +1153,13 @@ for (k, ), g in cluster_df.group_by(['big-cluster'], maintain_order=True):
     zz_cnt_res: dict[float, DrawKDEArgs] = {} # {thr: [zz_cnts]}
     final_fix_cnts = []
 
-    for thr in (np.linspace(0, 0.5, 21)):
-        zz_cnt_res[thr] = DrawKDEArgs([], 0, 0, pv, 0, [])
+    for thr in (np.linspace(0, 0.5, 1)):
+        zz_cnt_res[thr] = DrawKDEArgs([], 0, 0, pv, 0, [], [])
 
         for i in range(len(zzs_data.zzs)):
             fix_slice_id = zzs_data.fix_slice_ids[i]
             # print(fix_slice_id)
-            
+
             # <转换到转录组>
             # 由于不是所有landmark都画了
             # closest_landmark = min(landmark_warps.keys(), key=lambda x:abs(x-int(fix_slice_id)))
@@ -1143,6 +1169,12 @@ for (k, ), g in cluster_df.group_by(['big-cluster'], maintain_order=True):
             # </转换到转录组>
             # mov_slice_id = fix_to_mov_slice_id_dict.get(fix_slice_id)
             # if mov_slice_id not in '115, 123, 131, 139, 147, 155, 163, 171,179, 187, 195, 203, 211, 219, 227, 235, 243, 251, 259, 267': continue
+
+            scores = zzs_data.scores[i]
+            # scores = (
+            #     (scores - scores.min()) / (scores.max() - scores.min())
+            # )
+            zz_cnt_res[thr].cell_alphas.append(scores)
 
             fix_cnt_i = fix_slice_ids_to_index[int(fix_slice_id)]
             raw_fix_cnt = (fix_cnts[fix_cnt_i] - np.array([fix_cnt_i*added_w, 0]))
@@ -1239,14 +1271,16 @@ for (k, ), g in cluster_df.group_by(['big-cluster'], maintain_order=True):
     # )
 
 
-    kde_pdf_p = export_root / f'with-cells-{k}-{pv}-all-thr-bw{bandwidth:.4f}2.pdf'
-    shutil.rmtree(kde_pdf_p, ignore_errors=True)
-    draw_cells_with_kde(
-        kde_pdf_p, 
-        final_fix_cnts, 
-        zz_cnt_res,
-        cell_df=target_cells_df,
-    )
+    for cell_r in range(1, 3):
+        kde_pdf_p = export_root / f'with-cells-{k}-{pv}-all-thr-bw{bandwidth:.4f}-cellr{cell_r}-global.pdf'
+        shutil.rmtree(kde_pdf_p, ignore_errors=True)
+        draw_cells_with_kde(
+            kde_pdf_p, 
+            final_fix_cnts, 
+            zz_cnt_res,
+            cell_df=target_cells_df,
+            cell_r=cell_r,
+        )
 
     # inner_cell_ns = [n.inner_cell_n for thr, n in zz_cnt_res.items()]
     # total_cell_ns = [n.total_cell_n for thr, n in zz_cnt_res.items()]

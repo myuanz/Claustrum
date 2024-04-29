@@ -419,6 +419,7 @@ import_svg_p = Path('/mnt/97-macaque/projects/cla/injections-cells/injection-zon
 import_svg_p = Path('/mnt/97-macaque/projects/cla/injections-cells/injection-zone/SVG/stereo_masks_Mq277/SVG/Artboard 1.svg')
 import_svg_p = Path('/mnt/97-macaque/projects/cla/injections-cells/injection-zone/SVG/stereo_masks_Mq277_20240425_fix/SVG/Artboard 1.svg')
 import_svg_p = Path('/mnt/97-macaque/projects/cla/injections-cells/injection-zone/SVG/stereo_masks_Version2_all_ZoneX_withoutDEN_153Areas_0426-temp2/SVG/Artboard 1.svg')
+import_svg_p = Path('/mnt/97-macaque/projects/cla/injections-cells/injection-zone/SVG/case2-0424-2/SVG/Artboard 1.svg')
 
 
 
@@ -630,7 +631,7 @@ export_root = Path(f'/data/sdf/to_wangML/injection-zone/intermediate-results-202
 export_root = Path(f'/data/sdf/to_wangML/injection-zone/intermediate-results-20240423-2222-148-total')
 export_root = Path(f'/data/sdf/to_wangML/injection-zone/intermediate-results-20240424-mq277-test')
 export_root = Path(f'/data/sdf/to_wangML/injection-zone/intermediate-results-20240426-mq277')
-
+export_root = Path(f'/data/sdf/to_wangML/injection-zone/intermediate-results-case2-version0424-2-0429')
 
 
 # export_root = Path('/mnt/97-macaque/projects/cla/injections-cells/injection-zone/intermediate-results-20240221-wml-test')
